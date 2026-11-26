@@ -7,7 +7,7 @@
 
 ### Tests
 - Added unit coverage for native v14, legacy success, explicit failure, malformed, and HTTP-error join responses.
-- Added an isolated Docker Compose smoke-test deployment with its own SQLite file, data directory, container name, and loopback-only port; documented production-safe build/run steps.
+- Added an isolated Docker Compose smoke-test deployment with its own SQLite file, data directory, container name, and dedicated host-network port 3011 for the headless browser; documented production-safe build/run steps and firewall precautions.
 
 ## [3.4.1] 2026-7-01
 
