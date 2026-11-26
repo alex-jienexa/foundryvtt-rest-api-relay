@@ -148,7 +148,7 @@ The test deployment has deliberate isolation boundaries:
 - It uses a separate container name (`foundry-relay-v14-headless-test`) and binds only to host loopback on port `3011`.
 - It mounts only `./data-v14-headless-test` at `/app/data` and uses a separate SQLite file, `relay-v14-test.db`.
 - It does not load `.env` or the production Compose file. Secrets are generated and persisted in the test data directory.
-- It does not declare or reuse the production container, volume, database, or network.
+- It does not declare or reuse the production container, data directory, or database. Host networking is used only to let the browser reach the test Relay; keep TCP `3011` blocked from public ingress in the server firewall.
 
 On the server, clone the fix branch into a new directory (do not run these commands inside the production deployment directory):
 
@@ -162,13 +162,13 @@ docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml logs -f --tail=100
 ```
 
-The test UI is available on the server at `http://127.0.0.1:3011`. From a workstation, open an SSH tunnel:
+The test UI is available on the server at `http://127.0.0.1:3011`. Because the container uses host networking, verify that the server firewall does not allow public inbound TCP `3011` (for UFW, `sudo ufw deny 3011/tcp`; loopback and the SSH tunnel remain available). From a workstation, open an SSH tunnel:
 
 ```bash
 ssh -L 3011:127.0.0.1:3011 user@YOUR_SERVER
 ```
 
-Then visit `http://127.0.0.1:3011` locally. Create a separate test account and a test Foundry credential; do not copy production API keys or credentials into this instance. Verify the Headless session against the target Foundry world and inspect the logs for the join response and browser diagnostics.
+Then visit `http://127.0.0.1:3011` locally. Create a separate test account and a test Foundry credential; do not copy production API keys or credentials into this instance. Use a dedicated Foundry test world and configure that world's REST API module to connect to `http://127.0.0.1:3011` (the headless browser shares the host network). Do not change the production world's Relay URL. Verify the Headless session and inspect the logs for the join response and browser diagnostics.
 
 To stop only the test instance:
 
