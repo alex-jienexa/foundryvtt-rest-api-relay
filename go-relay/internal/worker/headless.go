@@ -1728,6 +1728,57 @@ func selectWorld(ctx context.Context, worldName string) error {
 	return nil
 }
 
+// validateFoundryJoinResponse accepts Foundry's native /join success payload.
+// Foundry v14 returns a message and redirect; older/custom builds may also
+// include explicit status/response fields. HTTP success is authoritative when
+// those optional fields are absent.
+func validateFoundryJoinResponse(statusCode int, body []byte) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		if statusCode < 200 || statusCode >= 300 {
+			return fmt.Errorf("HTTP %d: %s", statusCode, strings.TrimSpace(string(body)))
+		}
+		return fmt.Errorf("invalid JSON response from Foundry: %w", err)
+	}
+	if payload == nil {
+		return fmt.Errorf("Foundry returned an empty join response")
+	}
+
+	field := func(name string) string {
+		raw, ok := payload[name]
+		if !ok {
+			return ""
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			return strings.TrimSpace(value)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+
+	if statusCode < 200 || statusCode >= 300 {
+		message := field("error")
+		if message == "" {
+			message = field("message")
+		}
+		if message == "" {
+			message = strings.TrimSpace(string(body))
+		}
+		return fmt.Errorf("HTTP %d: %s", statusCode, message)
+	}
+
+	if message := field("error"); message != "" && message != "null" {
+		return fmt.Errorf("%s", message)
+	}
+	for _, key := range []string{"status", "response"} {
+		value := field(key)
+		if value != "" && value != "null" && !strings.EqualFold(value, "success") {
+			return fmt.Errorf("Foundry returned %s=%q", key, value)
+		}
+	}
+	return nil
+}
+
 func loginToFoundry(ctx context.Context, username, password string) (string, error) {
 	loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1758,10 +1809,9 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 		return "", fmt.Errorf("configured Foundry user is already logged in (another active session may be holding the slot)")
 	}
 
-	// POST /join with an explicit password instead of filling the form: Foundry's
-	// form drops an empty password field on submit, so a passwordless GM (stored as
-	// createPassword("")) can never log in through it. Posting ourselves guarantees
-	// the password — including "" — reaches the server.
+	// Use the same JSON request contract as Foundry's own join form. In v14,
+	// a successful response contains message + redirect; it does not necessarily
+	// contain the legacy/custom status="success" field.
 	js := fmt.Sprintf(`
 		(async function() {
 			var userId = %q;
@@ -1776,17 +1826,20 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ action: 'join', userid: userId, password: %q })
 				});
-				if (resp.ok) {
-					let data = {};
-					try { data = await resp.json(); } catch (e) {}
-					if (!data || data.status !== 'success') return 'fail:' + ((data && data.message) || 'join was not accepted');
+				const body = await resp.text();
+				let data = null;
+				try { data = JSON.parse(body); } catch (e) {}
+				const explicitFailure = data && (
+					data.error ||
+					(typeof data.status === 'string' && data.status.toLowerCase() !== 'success') ||
+					(typeof data.response === 'string' && data.response.toLowerCase() !== 'success')
+				);
+				if (resp.ok && data && !explicitFailure) {
 					setTimeout(function() { window.location.href = data.redirect || '/game'; }, 0);
-					return 'ok:' + userId;
 				}
-				const t = (await resp.text()).replace(/\s+/g, ' ').trim().substring(0, 120);
-				return 'fail:' + t;
+				return JSON.stringify({ httpStatus: resp.status, body: body, userId: userId });
 			} catch (e) {
-				return 'fail:' + (e && e.message ? e.message : 'join request failed');
+				return JSON.stringify({ error: (e && e.message) ? e.message : 'join request failed' });
 			}
 		})()
 	`, username, strings.ToLower(username), password)
@@ -1797,13 +1850,27 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	)); err != nil {
 		return "", fmt.Errorf("login eval: %w", err)
 	}
-	if strings.HasPrefix(result, "fail:") {
-		return "", fmt.Errorf("login rejected by Foundry: %s", strings.TrimPrefix(result, "fail:"))
+
+	var joinResult struct {
+		HTTPStatus int    `json:"httpStatus"`
+		Body       string `json:"body"`
+		UserID     string `json:"userId"`
+		Error      string `json:"error"`
 	}
-	userID := strings.TrimPrefix(result, "ok:")
+	if err := json.Unmarshal([]byte(result), &joinResult); err != nil {
+		return "", fmt.Errorf("decode Foundry join result: %w", err)
+	}
+	if joinResult.Error != "" {
+		return "", fmt.Errorf("login request failed: %s", joinResult.Error)
+	}
+	if err := validateFoundryJoinResponse(joinResult.HTTPStatus, []byte(joinResult.Body)); err != nil {
+		return "", fmt.Errorf("login rejected by Foundry: %w", err)
+	}
+	userID := joinResult.UserID
 	if userID == "" {
 		userID = username
 	}
+
 	// The POST already returned Foundry's authoritative verdict; the caller waits
 	// for the game canvas to confirm the world finished loading.
 	log.Info().Str("userId", userID).Msg("Headless login succeeded via POST /join")
