@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Foundry v14 headless login**: accept Foundry's native `POST /join` success payload (`message` + `redirect`) when it omits the optional `status: "success"` field. Preserve validation for explicit error/status fields and non-2xx responses.
+
+### Tests
+- Added unit coverage for native v14, legacy success, explicit failure, malformed, and HTTP-error join responses.
+
 ## [3.4.1] 2026-7-01
 
 ### Added
