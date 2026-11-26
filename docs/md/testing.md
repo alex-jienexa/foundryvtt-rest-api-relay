@@ -157,6 +157,7 @@ git clone --branch fix/foundry-v14-headless-auth https://github.com/alex-jienexa
 cd /opt/foundry-relay-v14-test
 
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml config
+docker run --rm -v "$PWD/go-relay:/src" -w /src golang:1.26-alpine go test ./internal/worker -run TestValidateFoundryJoinResponse
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml build
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml logs -f --tail=100
