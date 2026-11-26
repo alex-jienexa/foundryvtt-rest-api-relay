@@ -94,6 +94,21 @@ FOUNDRY_USERNAME=Gamemaster
 FOUNDRY_PASSWORD=your-password
 ```
 
+### Foundry v14 headless login
+
+The Go headless worker submits the Foundry join form as JSON to `POST /join`, using the same content type as Foundry's own client. A successful response from Foundry v14 can contain `message` and `redirect` without a `status: "success"` property. The worker therefore treats a successful HTTP response as accepted unless the payload contains an explicit error or a non-success `status`/`response` value.
+
+After the join request is accepted, the worker follows Foundry's `redirect` (falling back to `/game`) and separately waits for the game UI to load. A successful HTTP response alone does not mean the headless session is ready.
+
+Run the response-contract unit tests from the Go relay module:
+
+```bash
+cd go-relay
+go test ./internal/worker -run TestValidateFoundryJoinResponse
+```
+
+For live login diagnostics, set `CAPTURE_BROWSER_CONSOLE=warn` (or `error`) in the Relay environment. Browser logs are written under `DATA_DIR/browser-logs`. Check the first Foundry response and the browser log before changing Relay API keys or Foundry connection tokens: those credentials are separate from the Foundry world user's login.
+
 :::caution Known Limitation
 Headless mode may fail if there are already GMs connected to the Foundry world, as they may retain "primary GM" status and the relay will connect to them instead of the headless session. Ensure no other GM clients are connected when running headless tests. This will be improved in a future update.
 :::
