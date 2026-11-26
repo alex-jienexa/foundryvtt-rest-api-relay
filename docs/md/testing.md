@@ -138,6 +138,46 @@ Without this, only invalid-userId error handling tests run. With it, additional 
 - Write permission denial (player can't update/delete GM-owned entities)
 - Chat whisper visibility (player can't see GM-only whispers)
 
+## Isolated Docker smoke test (production-safe)
+
+Use the dedicated `docker-compose.v14-test.yml` file to build and run the headless-auth fix without attaching the production database.
+
+The test deployment has deliberate isolation boundaries:
+
+- It builds the image locally as `foundry-relay:v14-headless-test`; it does not retag or replace the production image.
+- It uses a separate container name (`foundry-relay-v14-headless-test`) and binds only to host loopback on port `3011`.
+- It mounts only `./data-v14-headless-test` at `/app/data` and uses a separate SQLite file, `relay-v14-test.db`.
+- It does not load `.env` or the production Compose file. Secrets are generated and persisted in the test data directory.
+- It does not declare or reuse the production container, volume, database, or network.
+
+On the server, clone the fix branch into a new directory (do not run these commands inside the production deployment directory):
+
+```bash
+git clone --branch fix/foundry-v14-headless-auth https://github.com/alex-jienexa/foundryvtt-rest-api-relay.git /opt/foundry-relay-v14-test
+cd /opt/foundry-relay-v14-test
+
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml config
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml build
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml logs -f --tail=100
+```
+
+The test UI is available on the server at `http://127.0.0.1:3011`. From a workstation, open an SSH tunnel:
+
+```bash
+ssh -L 3011:127.0.0.1:3011 user@YOUR_SERVER
+```
+
+Then visit `http://127.0.0.1:3011` locally. Create a separate test account and a test Foundry credential; do not copy production API keys or credentials into this instance. Verify the Headless session against the target Foundry world and inspect the logs for the join response and browser diagnostics.
+
+To stop only the test instance:
+
+```bash
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml down
+```
+
+Do not add `-v` and do not point `./data-v14-headless-test` or `SQLITE_PATH` at the production data directory. The test data is intentionally retained between restarts so its generated encryption/JWT secrets remain stable.
+
 ## Running Tests
 
 ### Full Test Suite
