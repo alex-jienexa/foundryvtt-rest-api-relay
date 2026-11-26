@@ -145,10 +145,10 @@ Use the dedicated `docker-compose.v14-test.yml` file to build and run the headle
 The test deployment has deliberate isolation boundaries:
 
 - It builds the image locally as `foundry-relay:v14-headless-test`; it does not retag or replace the production image.
-- It uses a separate container name (`foundry-relay-v14-headless-test`) and binds only to host loopback on port `3011`.
+- It uses a separate container name (`foundry-relay-v14-headless-test`) and binds only to host loopback on port `3012`.
 - It mounts only `./data-v14-headless-test` at `/app/data` and uses a separate SQLite file, `relay-v14-test.db`.
 - It does not load `.env` or the production Compose file. Secrets are generated and persisted in the test data directory.
-- It does not declare or reuse the production container, data directory, or database. Host networking is used only to let the browser reach the test Relay; keep TCP `3011` blocked from public ingress in the server firewall.
+- It does not declare or reuse the production container, data directory, or database. Host networking is used only to let the browser reach the test Relay; keep TCP `3012` blocked from public ingress in the server firewall.
 
 On the server, clone the fix branch into a new directory (do not run these commands inside the production deployment directory):
 
@@ -162,7 +162,7 @@ docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d
 docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml logs -f --tail=100
 ```
 
-The test UI is available on the server at `http://127.0.0.1:3011`. Because the container uses host networking, verify that the server firewall does not allow public inbound TCP `3011` (for UFW, `sudo ufw deny 3011/tcp`; loopback and the SSH tunnel remain available). From a workstation, open an SSH tunnel:
+The test UI is available on the server at `http://127.0.0.1:3011`. Because the container uses host networking, verify that the server firewall does not allow public inbound TCP `3012` (for UFW, `sudo ufw deny 3011/tcp`; loopback and the SSH tunnel remain available). From a workstation, open an SSH tunnel:
 
 ```bash
 ssh -L 3011:127.0.0.1:3011 user@YOUR_SERVER
