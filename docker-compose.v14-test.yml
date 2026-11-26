@@ -3,7 +3,7 @@
 # Run with: docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d --build
 #
 # Host networking lets the headless Chrome process reach the test relay at
-# 127.0.0.1:3011, so a dedicated Foundry test world can point its module there.
+# 127.0.0.1:3012, so a dedicated Foundry test world can point its module there.
 
 services:
   relay-v14-test:
