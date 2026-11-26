@@ -1,0 +1,25 @@
+# Isolated smoke-test deployment for the Foundry v14 headless-auth fix.
+# This intentionally does NOT read .env and does NOT mount ./data (production data).
+# Run with: docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d --build
+
+services:
+  relay-v14-test:
+    image: foundry-relay:v14-headless-test
+    build:
+      context: .
+      dockerfile: go-relay/Dockerfile
+    container_name: foundry-relay-v14-headless-test
+    environment:
+      APP_ENV: production
+      PORT: "3010"
+      DB_TYPE: sqlite
+      SQLITE_PATH: /app/data/relay-v14-test.db
+      DATA_DIR: /app/data
+      ALLOW_HEADLESS: "true"
+      CAPTURE_BROWSER_CONSOLE: warn
+    volumes:
+      - ./data-v14-headless-test:/app/data
+    ports:
+      - "127.0.0.1:3011:3010"
+    shm_size: "1gb"
+    restart: "no"
