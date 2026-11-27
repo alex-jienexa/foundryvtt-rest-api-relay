@@ -74,23 +74,12 @@ func TestValidateFoundryJoinResponse(t *testing.T) {
 }
 
 func TestFoundryV14JoinPayload(t *testing.T) {
-	payload := struct {
-		Username string `json:"username"`
-		UserID   string `json:"userId"`
-		Password string `json:"password"`
-		Action   string `json:"action"`
-	}{
-		Username: "Puffy",
-		UserID:   "gkYizCRHVPCjt0Xe",
-		Password: "test-password",
-		Action:   "join",
-	}
-	encoded, err := json.Marshal(payload)
+	encoded, err := buildFoundryV14JoinPayload("Puffy", "gkYizCRHVPCjt0Xe", "test-password")
 	if err != nil {
-		t.Fatalf("marshal join payload: %v", err)
+		t.Fatalf("build join payload: %v", err)
 	}
 	var got map[string]string
-	if err := json.Unmarshal(encoded, &got); err != nil {
+	if err := json.Unmarshal([]byte(encoded), &got); err != nil {
 		t.Fatalf("unmarshal join payload: %v", err)
 	}
 	want := map[string]string{
@@ -106,5 +95,11 @@ func TestFoundryV14JoinPayload(t *testing.T) {
 		if got[key] != value {
 			t.Errorf("payload[%q] = %q, want %q", key, got[key], value)
 		}
+	}
+}
+
+func TestFoundryV14JoinPayloadRequiresUserID(t *testing.T) {
+	if _, err := buildFoundryV14JoinPayload("Puffy", "", "test-password"); err == nil {
+		t.Fatal("expected missing FOUNDRY_USER_ID to fail")
 	}
 }
