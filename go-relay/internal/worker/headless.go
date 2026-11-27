@@ -1808,7 +1808,8 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	if err := chromedp.Run(loginCtx, chromedp.Evaluate(`
 		(function() {
 			const attrs = el => Array.from(el.attributes || []).reduce((out, a) => {
-				out[a.name] = a.value;
+				// Attribute values can contain prefilled credentials; omit them.
+				if (a.name.toLowerCase() !== 'value') out[a.name] = a.value;
 				return out;
 			}, {});
 			const compactText = el => (el.innerText || el.textContent || '').trim().slice(0, 160);
