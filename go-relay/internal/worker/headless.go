@@ -1802,6 +1802,29 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	`, strings.ToLower(username)), &preCheck)); err != nil {
 		log.Warn().Err(err).Msg("Pre-submit user check eval failed; proceeding without pre-check")
 	}
+	// Capture the actual login form before submitting. This helps diagnose
+	// Foundry v14 installations where /join rejects the submitted user ID.
+	var formInfo string
+	if err := chromedp.Run(loginCtx, chromedp.Evaluate(`
+		(function() {
+			const sel = document.querySelector('select[name="userid"]');
+			return JSON.stringify({
+				url: location.href,
+				title: document.title,
+				hasUserSelect: !!sel,
+				options: sel ? Array.from(sel.options).map(o => ({
+					text: o.textContent.trim(),
+					value: o.value,
+					disabled: o.disabled
+				})) : []
+			});
+		})()
+	`, &formInfo)); err != nil {
+		log.Warn().Err(err).Msg("Could not inspect Foundry login form")
+	} else {
+		log.Info().Str("formInfo", formInfo).Msg("Foundry login form inspected")
+	}
+
 	switch preCheck {
 	case "not-found":
 		return "", fmt.Errorf("configured Foundry user not found on this server (check credential settings)")
@@ -1864,7 +1887,7 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 		return "", fmt.Errorf("login request failed: %s", joinResult.Error)
 	}
 	if err := validateFoundryJoinResponse(joinResult.HTTPStatus, []byte(joinResult.Body)); err != nil {
-		return "", fmt.Errorf("login rejected by Foundry: %w", err)
+		return "", fmt.Errorf("login rejected by Foundry (submitted userid=%q): %w", joinResult.UserID, err)
 	}
 	userID := joinResult.UserID
 	if userID == "" {
