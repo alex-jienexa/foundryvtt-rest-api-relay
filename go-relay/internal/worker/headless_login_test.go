@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -69,5 +70,41 @@ func TestValidateFoundryJoinResponse(t *testing.T) {
 				t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
 			}
 		})
+	}
+}
+
+func TestFoundryV14JoinPayload(t *testing.T) {
+	payload := struct {
+		Username string `json:"username"`
+		UserID   string `json:"userId"`
+		Password string `json:"password"`
+		Action   string `json:"action"`
+	}{
+		Username: "Puffy",
+		UserID:   "gkYizCRHVPCjt0Xe",
+		Password: "test-password",
+		Action:   "join",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal join payload: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("unmarshal join payload: %v", err)
+	}
+	want := map[string]string{
+		"username": "Puffy",
+		"userId":   "gkYizCRHVPCjt0Xe",
+		"password": "test-password",
+		"action":   "join",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected payload fields: %#v", got)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("payload[%q] = %q, want %q", key, got[key], value)
+		}
 	}
 }
