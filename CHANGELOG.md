@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Foundry v14 headless login**: accept Foundry's native `POST /join` success payload (`message` + `redirect`) when it omits the optional `status: "success"` field. Preserve validation for explicit error/status fields and non-2xx responses.
+
+### Tests
+- Added unit coverage for native v14, legacy success, explicit failure, malformed, and HTTP-error join responses.
+- Added an isolated Docker Compose smoke-test deployment with its own SQLite file, data directory, container name, and dedicated host-network port 3012 for the headless browser; documented production-safe build/run steps and firewall precautions.
+
 ## [3.4.1] 2026-7-01
 
 ### Added

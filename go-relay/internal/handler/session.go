@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -74,6 +75,16 @@ func sessionHandshakeHandler(db *database.DB, cfg *config.Config) http.HandlerFu
 			helpers.WriteError(w, http.StatusBadRequest, "x-foundry-url and x-username headers are required")
 			return
 		}
+
+		// Browser clients must percent-encode non-ASCII header values because
+		// Fetch only accepts ByteString header values. Decode exactly once here
+		// so the worker receives the real Foundry username, not "%D0%...".
+		decodedUsername, err := url.PathUnescape(username)
+		if err != nil {
+			helpers.WriteError(w, http.StatusBadRequest, "x-username must be a valid URL-encoded value")
+			return
+		}
+		username = decodedUsername
 
 		privateKey, err := rsa.GenerateKey(cryptorand.Reader, 2048)
 		if err != nil {

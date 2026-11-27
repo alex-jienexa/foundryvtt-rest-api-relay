@@ -214,6 +214,7 @@ type HeadlessManager struct {
 	redis           *config.RedisClient
 	maxSessions     int
 	inactiveTimeout time.Duration
+	foundryUserID   string // configured Foundry v14 account ID
 	chromePath      string
 	resolvedChrome  string
 	dataDir         string // absolute path to the data directory (for browser logs)
@@ -282,6 +283,7 @@ func NewHeadlessManager(clientManager *ws.ClientManager, redis *config.RedisClie
 		redis:            redis,
 		maxSessions:      cfg.MaxHeadlessSessions,
 		inactiveTimeout:  inactiveTimeout,
+		foundryUserID:    cfg.FoundryUserID,
 		chromePath:       cfg.ChromePath,
 		dataDir:          cfg.DataDir,
 		userDataDir:      userDataDir,
@@ -858,7 +860,7 @@ func (m *HeadlessManager) LaunchSession(apiKey, foundryURL, username, password, 
 
 	// Login
 	log.Info().Str("username", username).Msg("Logging in")
-	_, err = loginToFoundry(tabCtx, username, password)
+	_, err = loginToFoundry(tabCtx, username, password, m.foundryUserID)
 	if err != nil {
 		tabCancel()
 		return "", "", fmt.Errorf("login failed: %w", err)
@@ -1357,7 +1359,7 @@ func (m *HeadlessManager) launchHeadlessWithSeededToken(ctx context.Context, opt
 
 	// Login
 	log.Info().Str("username", opts.Username).Msg("Logging in")
-	if _, err := loginToFoundry(tabCtx, opts.Username, opts.Password); err != nil {
+	if _, err := loginToFoundry(tabCtx, opts.Username, opts.Password, m.foundryUserID); err != nil {
 		tabCancel()
 		return "", fmt.Errorf("login failed: %w", err)
 	}
@@ -1728,7 +1730,82 @@ func selectWorld(ctx context.Context, worldName string) error {
 	return nil
 }
 
-func loginToFoundry(ctx context.Context, username, password string) (string, error) {
+// validateFoundryJoinResponse accepts Foundry's native /join success payload.
+// Foundry v14 returns a message and redirect; older/custom builds may also
+// include explicit status/response fields. HTTP success is authoritative when
+// those optional fields are absent.
+func validateFoundryJoinResponse(statusCode int, body []byte) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		if statusCode < 200 || statusCode >= 300 {
+			return fmt.Errorf("HTTP %d: %s", statusCode, strings.TrimSpace(string(body)))
+		}
+		return fmt.Errorf("invalid JSON response from Foundry: %w", err)
+	}
+	if payload == nil {
+		return fmt.Errorf("Foundry returned an empty join response")
+	}
+
+	field := func(name string) string {
+		raw, ok := payload[name]
+		if !ok {
+			return ""
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err == nil {
+			return strings.TrimSpace(value)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+
+	if statusCode < 200 || statusCode >= 300 {
+		message := field("error")
+		if message == "" {
+			message = field("message")
+		}
+		if message == "" {
+			message = strings.TrimSpace(string(body))
+		}
+		return fmt.Errorf("HTTP %d: %s", statusCode, message)
+	}
+
+	if message := field("error"); message != "" && message != "null" {
+		return fmt.Errorf("%s", message)
+	}
+	for _, key := range []string{"status", "response"} {
+		value := field(key)
+		if value != "" && value != "null" && !strings.EqualFold(value, "success") {
+			return fmt.Errorf("Foundry returned %s=%q", key, value)
+		}
+	}
+	return nil
+}
+
+type foundryV14JoinPayload struct {
+	Username string `json:"username"`
+	UserID   string `json:"userId"`
+	Password string `json:"password"`
+	Action   string `json:"action"`
+}
+
+func buildFoundryV14JoinPayload(username, userID, password string) (string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("FOUNDRY_USER_ID is required for Foundry v14 headless login")
+	}
+	payload := foundryV14JoinPayload{
+		Username: username,
+		UserID:   userID,
+		Password: password,
+		Action:   "join",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal Foundry v14 join payload: %w", err)
+	}
+	return string(encoded), nil
+}
+
+func loginToFoundry(ctx context.Context, username, password, foundryUserID string) (string, error) {
 	loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := chromedp.Run(loginCtx, chromedp.WaitVisible(`input[name="password"]`, chromedp.ByQuery)); err != nil {
@@ -1751,6 +1828,64 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	`, strings.ToLower(username)), &preCheck)); err != nil {
 		log.Warn().Err(err).Msg("Pre-submit user check eval failed; proceeding without pre-check")
 	}
+	// Capture the complete, non-secret structure of the Foundry join form.
+	// Never read input values: the password field must not enter diagnostic logs.
+	var formInfo string
+	if err := chromedp.Run(loginCtx, chromedp.Evaluate(`
+		(function() {
+			const attrs = el => Array.from(el.attributes || []).reduce((out, a) => {
+				// Attribute values can contain prefilled credentials; omit them.
+				if (a.name.toLowerCase() !== 'value') out[a.name] = a.value;
+				return out;
+			}, {});
+			const compactText = el => (el.innerText || el.textContent || '').trim().slice(0, 160);
+			return JSON.stringify({
+				url: location.href,
+				title: document.title,
+				forms: Array.from(document.forms).map(f => ({
+					action: f.action,
+					method: f.method,
+					attributes: attrs(f)
+				})),
+				inputs: Array.from(document.querySelectorAll('input')).map(el => ({
+					type: el.type,
+					name: el.name,
+					id: el.id,
+					autocomplete: el.autocomplete,
+					placeholder: el.placeholder,
+					ariaLabel: el.getAttribute('aria-label'),
+					attributes: attrs(el)
+				})),
+				selects: Array.from(document.querySelectorAll('select')).map(el => ({
+					name: el.name,
+					id: el.id,
+					attributes: attrs(el),
+					options: Array.from(el.options).map(o => ({
+						text: compactText(o),
+						value: o.value,
+						disabled: o.disabled
+					}))
+				})),
+				buttons: Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]')).map(el => ({
+					text: compactText(el),
+						name: el.name,
+						id: el.id,
+					type: el.type,
+					attributes: attrs(el)
+				})),
+				labels: Array.from(document.querySelectorAll('label')).map(el => ({
+					text: compactText(el),
+					 htmlFor: el.htmlFor
+				})),
+				bodyText: (document.body ? document.body.innerText : '').trim().slice(0, 1200)
+			});
+		})()
+	`, &formInfo)); err != nil {
+		log.Warn().Err(err).Msg("Could not inspect Foundry login form")
+	} else {
+		log.Info().Str("username", username).Str("formInfo", formInfo).Msg("Foundry login form inspected")
+	}
+
 	switch preCheck {
 	case "not-found":
 		return "", fmt.Errorf("configured Foundry user not found on this server (check credential settings)")
@@ -1758,10 +1893,15 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 		return "", fmt.Errorf("configured Foundry user is already logged in (another active session may be holding the slot)")
 	}
 
-	// POST /join with an explicit password instead of filling the form: Foundry's
-	// form drops an empty password field on submit, so a passwordless GM (stored as
-	// createPassword("")) can never log in through it. Posting ourselves guarantees
-	// the password — including "" — reaches the server.
+	// Build the exact v14 payload in Go so its field names and shape are unit-tested.
+	v14Payload, err := buildFoundryV14JoinPayload(username, foundryUserID, password)
+	if err != nil && foundryUserID != "" {
+		return "", err
+	}
+
+	// Use the same JSON request contract as Foundry's own join form. In v14,
+	// a successful response contains message + redirect; it does not necessarily
+	// contain the legacy/custom status="success" field.
 	js := fmt.Sprintf(`
 		(async function() {
 			var userId = %q;
@@ -1770,26 +1910,36 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 				const match = Array.from(sel.options).find(o => o.textContent.trim().toLowerCase() === %q);
 				if (match) userId = match.value;
 			}
+			const isV14 = !!document.querySelector('input[name="username"]');
+			if (isV14 && !%q) {
+				return JSON.stringify({ error: 'FOUNDRY_USER_ID is required for Foundry v14 headless login' });
+			}
+			const payload = isV14
+				? JSON.parse(%q)
+				: { action: 'join', userid: userId, password: %q };
 			try {
 				const resp = await fetch('/join', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ action: 'join', userid: userId, password: %q })
+					body: JSON.stringify(payload)
 				});
-				if (resp.ok) {
-					let data = {};
-					try { data = await resp.json(); } catch (e) {}
-					if (!data || data.status !== 'success') return 'fail:' + ((data && data.message) || 'join was not accepted');
+				const body = await resp.text();
+				let data = null;
+				try { data = JSON.parse(body); } catch (e) {}
+				const explicitFailure = data && (
+					data.error ||
+					(typeof data.status === 'string' && data.status.toLowerCase() !== 'success') ||
+					(typeof data.response === 'string' && data.response.toLowerCase() !== 'success')
+				);
+				if (resp.ok && data && !explicitFailure) {
 					setTimeout(function() { window.location.href = data.redirect || '/game'; }, 0);
-					return 'ok:' + userId;
 				}
-				const t = (await resp.text()).replace(/\s+/g, ' ').trim().substring(0, 120);
-				return 'fail:' + t;
+				return JSON.stringify({ httpStatus: resp.status, body: body, userId: userId });
 			} catch (e) {
-				return 'fail:' + (e && e.message ? e.message : 'join request failed');
+				return JSON.stringify({ error: (e && e.message) ? e.message : 'join request failed' });
 			}
 		})()
-	`, username, strings.ToLower(username), password)
+	`, username, strings.ToLower(username), foundryUserID, v14Payload, password)
 
 	var result string
 	if err := chromedp.Run(loginCtx, chromedp.Evaluate(js, &result,
@@ -1797,13 +1947,27 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	)); err != nil {
 		return "", fmt.Errorf("login eval: %w", err)
 	}
-	if strings.HasPrefix(result, "fail:") {
-		return "", fmt.Errorf("login rejected by Foundry: %s", strings.TrimPrefix(result, "fail:"))
+
+	var joinResult struct {
+		HTTPStatus int    `json:"httpStatus"`
+		Body       string `json:"body"`
+		UserID     string `json:"userId"`
+		Error      string `json:"error"`
 	}
-	userID := strings.TrimPrefix(result, "ok:")
+	if err := json.Unmarshal([]byte(result), &joinResult); err != nil {
+		return "", fmt.Errorf("decode Foundry join result: %w", err)
+	}
+	if joinResult.Error != "" {
+		return "", fmt.Errorf("login request failed: %s", joinResult.Error)
+	}
+	if err := validateFoundryJoinResponse(joinResult.HTTPStatus, []byte(joinResult.Body)); err != nil {
+		return "", fmt.Errorf("login rejected by Foundry (submitted userid=%q): %w", joinResult.UserID, err)
+	}
+	userID := joinResult.UserID
 	if userID == "" {
 		userID = username
 	}
+
 	// The POST already returned Foundry's authoritative verdict; the caller waits
 	// for the game canvas to confirm the world finished loading.
 	log.Info().Str("userId", userID).Msg("Headless login succeeded via POST /join")

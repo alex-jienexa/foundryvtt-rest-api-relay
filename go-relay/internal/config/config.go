@@ -66,6 +66,7 @@ type Config struct {
 	AppName         string
 
 	// Browser/Logging
+	FoundryUserID           string // Foundry v14 user ID used by headless login; env: FOUNDRY_USER_ID
 	ChromePath              string
 	LogLevel                string
 	CaptureBrowserConsole   string
@@ -144,6 +145,7 @@ func Load() *Config {
 			return getEnv("FLY_APP_NAME", "")
 		}(),
 
+		FoundryUserID:           getEnv("FOUNDRY_USER_ID", ""),
 		ChromePath:              getEnv("PUPPETEER_EXECUTABLE_PATH", ""),
 		LogLevel:                getEnv("LOG_LEVEL", "info"),
 		CaptureBrowserConsole:   getEnv("CAPTURE_BROWSER_CONSOLE", ""),

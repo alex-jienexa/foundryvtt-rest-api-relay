@@ -94,6 +94,21 @@ FOUNDRY_USERNAME=Gamemaster
 FOUNDRY_PASSWORD=your-password
 ```
 
+### Foundry v14 headless login
+
+The Go headless worker submits the Foundry join form as JSON to `POST /join`, using the same content type as Foundry's own client. A successful response from Foundry v14 can contain `message` and `redirect` without a `status: "success"` property. The worker therefore treats a successful HTTP response as accepted unless the payload contains an explicit error or a non-success `status`/`response` value.
+
+After the join request is accepted, the worker follows Foundry's `redirect` (falling back to `/game`) and separately waits for the game UI to load. A successful HTTP response alone does not mean the headless session is ready.
+
+Run the response-contract unit tests from the Go relay module:
+
+```bash
+cd go-relay
+go test ./internal/worker -run TestValidateFoundryJoinResponse
+```
+
+For live login diagnostics, set `CAPTURE_BROWSER_CONSOLE=warn` (or `error`) in the Relay environment. Browser logs are written under `DATA_DIR/browser-logs`. Check the first Foundry response and the browser log before changing Relay API keys or Foundry connection tokens: those credentials are separate from the Foundry world user's login.
+
 :::caution Known Limitation
 Headless mode may fail if there are already GMs connected to the Foundry world, as they may retain "primary GM" status and the relay will connect to them instead of the headless session. Ensure no other GM clients are connected when running headless tests. This will be improved in a future update.
 :::
@@ -122,6 +137,47 @@ Without this, only invalid-userId error handling tests run. With it, additional 
 - Search result filtering (player sees fewer results than GM)
 - Write permission denial (player can't update/delete GM-owned entities)
 - Chat whisper visibility (player can't see GM-only whispers)
+
+## Isolated Docker smoke test (production-safe)
+
+Use the dedicated `docker-compose.v14-test.yml` file to build and run the headless-auth fix without attaching the production database.
+
+The test deployment has deliberate isolation boundaries:
+
+- It builds the image locally as `foundry-relay:v14-headless-test`; it does not retag or replace the production image.
+- It uses a separate container name (`foundry-relay-v14-headless-test`) and listens on dedicated host port `3012` (host networking); public ingress must be blocked by the firewall.
+- It mounts only `./data-v14-headless-test` at `/app/data` and uses a separate SQLite file, `relay-v14-test.db`.
+- It does not load `.env` or the production Compose file. Secrets are generated and persisted in the test data directory.
+- It does not declare or reuse the production container, data directory, or database. Host networking is used only to let the browser reach the test Relay; keep TCP `3012` blocked from public ingress in the server firewall.
+
+On the server, clone the fix branch into a new directory (do not run these commands inside the production deployment directory):
+
+```bash
+git clone --branch fix/foundry-v14-headless-auth https://github.com/alex-jienexa/foundryvtt-rest-api-relay.git /opt/foundry-relay-v14-test
+cd /opt/foundry-relay-v14-test
+
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml config
+docker run --rm -v "$PWD/go-relay:/src" -w /src golang:1.26-alpine go test ./internal/worker -run TestValidateFoundryJoinResponse
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml build
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml up -d
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml logs -f --tail=100
+```
+
+The test UI is available on the server at `http://127.0.0.1:3012`. Because the container uses host networking, verify that the server firewall does not allow public inbound TCP `3012` (for UFW, `sudo ufw deny 3012/tcp`; loopback and the SSH tunnel remain available). From a workstation, open an SSH tunnel:
+
+```bash
+ssh -L 3012:127.0.0.1:3012 user@YOUR_SERVER
+```
+
+Then visit `http://127.0.0.1:3012` locally. Create a separate test account and a test Foundry credential; do not copy production API keys or credentials into this instance. Use a dedicated Foundry test world and configure that world's REST API module to connect to `http://127.0.0.1:3012` (the headless browser shares the host network). Do not change the production world's Relay URL. Verify the Headless session and inspect the logs for the join response and browser diagnostics.
+
+To stop only the test instance:
+
+```bash
+docker compose -p foundry-relay-v14-test -f docker-compose.v14-test.yml down
+```
+
+Do not add `-v` and do not point `./data-v14-headless-test` or `SQLITE_PATH` at the production data directory. The test data is intentionally retained between restarts so its generated encryption/JWT secrets remain stable.
 
 ## Running Tests
 

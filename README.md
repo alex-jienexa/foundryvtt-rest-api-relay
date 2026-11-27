@@ -105,7 +105,7 @@ The REST API provides endpoints across these resource groups:
 | `/encounter` | Combat encounter management |
 | `/dnd5e` | D&D 5th Edition specific operations |
 | `/structure` | World structure information |
-| `/session` | Headless Foundry sessions via Puppeteer |
+| `/session` | Headless Foundry sessions via Chrome/Chromium automation |
 | `and more` | Read the [api reference](https://foundryrestapi.com/docs/api) for more details |
 
 **Authentication:** Include your API key in the `x-api-key` header for all requests.
