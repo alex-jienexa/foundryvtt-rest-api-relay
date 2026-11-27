@@ -1781,6 +1781,30 @@ func validateFoundryJoinResponse(statusCode int, body []byte) error {
 	return nil
 }
 
+type foundryV14JoinPayload struct {
+	Username string `json:"username"`
+	UserID   string `json:"userId"`
+	Password string `json:"password"`
+	Action   string `json:"action"`
+}
+
+func buildFoundryV14JoinPayload(username, userID, password string) (string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return "", fmt.Errorf("FOUNDRY_USER_ID is required for Foundry v14 headless login")
+	}
+	payload := foundryV14JoinPayload{
+		Username: username,
+		UserID:   userID,
+		Password: password,
+		Action:   "join",
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("marshal Foundry v14 join payload: %w", err)
+	}
+	return string(encoded), nil
+}
+
 func loginToFoundry(ctx context.Context, username, password, foundryUserID string) (string, error) {
 	loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -1869,6 +1893,12 @@ func loginToFoundry(ctx context.Context, username, password, foundryUserID strin
 		return "", fmt.Errorf("configured Foundry user is already logged in (another active session may be holding the slot)")
 	}
 
+	// Build the exact v14 payload in Go so its field names and shape are unit-tested.
+	v14Payload, err := buildFoundryV14JoinPayload(username, foundryUserID, password)
+	if err != nil && foundryUserID != "" {
+		return "", err
+	}
+
 	// Use the same JSON request contract as Foundry's own join form. In v14,
 	// a successful response contains message + redirect; it does not necessarily
 	// contain the legacy/custom status="success" field.
@@ -1885,7 +1915,7 @@ func loginToFoundry(ctx context.Context, username, password, foundryUserID strin
 				return JSON.stringify({ error: 'FOUNDRY_USER_ID is required for Foundry v14 headless login' });
 			}
 			const payload = isV14
-				? { username: %q, userId: %q, password: %q, action: 'join' }
+				? JSON.parse(%q)
 				: { action: 'join', userid: userId, password: %q };
 			try {
 				const resp = await fetch('/join', {
@@ -1909,7 +1939,7 @@ func loginToFoundry(ctx context.Context, username, password, foundryUserID strin
 				return JSON.stringify({ error: (e && e.message) ? e.message : 'join request failed' });
 			}
 		})()
-	`, username, strings.ToLower(username), foundryUserID, username, foundryUserID, password, password)
+	`, username, strings.ToLower(username), foundryUserID, v14Payload, password)
 
 	var result string
 	if err := chromedp.Run(loginCtx, chromedp.Evaluate(js, &result,
