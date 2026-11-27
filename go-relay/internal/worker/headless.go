@@ -214,6 +214,7 @@ type HeadlessManager struct {
 	redis           *config.RedisClient
 	maxSessions     int
 	inactiveTimeout time.Duration
+	foundryUserID   string // configured Foundry v14 account ID
 	chromePath      string
 	resolvedChrome  string
 	dataDir         string // absolute path to the data directory (for browser logs)
@@ -282,6 +283,7 @@ func NewHeadlessManager(clientManager *ws.ClientManager, redis *config.RedisClie
 		redis:            redis,
 		maxSessions:      cfg.MaxHeadlessSessions,
 		inactiveTimeout:  inactiveTimeout,
+		foundryUserID:    cfg.FoundryUserID,
 		chromePath:       cfg.ChromePath,
 		dataDir:          cfg.DataDir,
 		userDataDir:      userDataDir,
@@ -858,7 +860,7 @@ func (m *HeadlessManager) LaunchSession(apiKey, foundryURL, username, password, 
 
 	// Login
 	log.Info().Str("username", username).Msg("Logging in")
-	_, err = loginToFoundry(tabCtx, username, password)
+	_, err = loginToFoundry(tabCtx, username, password, m.foundryUserID)
 	if err != nil {
 		tabCancel()
 		return "", "", fmt.Errorf("login failed: %w", err)
@@ -1357,7 +1359,7 @@ func (m *HeadlessManager) launchHeadlessWithSeededToken(ctx context.Context, opt
 
 	// Login
 	log.Info().Str("username", opts.Username).Msg("Logging in")
-	if _, err := loginToFoundry(tabCtx, opts.Username, opts.Password); err != nil {
+	if _, err := loginToFoundry(tabCtx, opts.Username, opts.Password, m.foundryUserID); err != nil {
 		tabCancel()
 		return "", fmt.Errorf("login failed: %w", err)
 	}
@@ -1779,7 +1781,7 @@ func validateFoundryJoinResponse(statusCode int, body []byte) error {
 	return nil
 }
 
-func loginToFoundry(ctx context.Context, username, password string) (string, error) {
+func loginToFoundry(ctx context.Context, username, password, foundryUserID string) (string, error) {
 	loginCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := chromedp.Run(loginCtx, chromedp.WaitVisible(`input[name="password"]`, chromedp.ByQuery)); err != nil {
@@ -1878,11 +1880,18 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 				const match = Array.from(sel.options).find(o => o.textContent.trim().toLowerCase() === %q);
 				if (match) userId = match.value;
 			}
+			const isV14 = !!document.querySelector('input[name="username"]');
+			if (isV14 && !%q) {
+				return JSON.stringify({ error: 'FOUNDRY_USER_ID is required for Foundry v14 headless login' });
+			}
+			const payload = isV14
+				? { username: %q, userId: %q, password: %q, action: 'join' }
+				: { action: 'join', userid: userId, password: %q };
 			try {
 				const resp = await fetch('/join', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ action: 'join', userid: userId, password: %q })
+					body: JSON.stringify(payload)
 				});
 				const body = await resp.text();
 				let data = null;
@@ -1900,7 +1909,7 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 				return JSON.stringify({ error: (e && e.message) ? e.message : 'join request failed' });
 			}
 		})()
-	`, username, strings.ToLower(username), password)
+	`, username, strings.ToLower(username), foundryUserID, username, foundryUserID, password, password)
 
 	var result string
 	if err := chromedp.Run(loginCtx, chromedp.Evaluate(js, &result,
