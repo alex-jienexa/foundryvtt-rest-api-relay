@@ -20,6 +20,7 @@ services:
       SQLITE_PATH: /app/data/relay-v14-test.db
       DATA_DIR: /app/data
       ALLOW_HEADLESS: "true"
+      FOUNDRY_USER_ID: ${FOUNDRY_USER_ID:-}
       CAPTURE_BROWSER_CONSOLE: warn
     volumes:
       - ./data-v14-headless-test:/app/data
