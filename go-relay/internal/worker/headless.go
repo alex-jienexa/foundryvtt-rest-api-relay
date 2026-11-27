@@ -1802,27 +1802,61 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	`, strings.ToLower(username)), &preCheck)); err != nil {
 		log.Warn().Err(err).Msg("Pre-submit user check eval failed; proceeding without pre-check")
 	}
-	// Capture the actual login form before submitting. This helps diagnose
-	// Foundry v14 installations where /join rejects the submitted user ID.
+	// Capture the complete, non-secret structure of the Foundry join form.
+	// Never read input values: the password field must not enter diagnostic logs.
 	var formInfo string
 	if err := chromedp.Run(loginCtx, chromedp.Evaluate(`
 		(function() {
-			const sel = document.querySelector('select[name="userid"]');
+			const attrs = el => Array.from(el.attributes || []).reduce((out, a) => {
+				out[a.name] = a.value;
+				return out;
+			}, {});
+			const compactText = el => (el.innerText || el.textContent || '').trim().slice(0, 160);
 			return JSON.stringify({
 				url: location.href,
 				title: document.title,
-				hasUserSelect: !!sel,
-				options: sel ? Array.from(sel.options).map(o => ({
-					text: o.textContent.trim(),
-					value: o.value,
-					disabled: o.disabled
-				})) : []
+				forms: Array.from(document.forms).map(f => ({
+					action: f.action,
+					method: f.method,
+					attributes: attrs(f)
+				})),
+				inputs: Array.from(document.querySelectorAll('input')).map(el => ({
+					type: el.type,
+					name: el.name,
+					id: el.id,
+					autocomplete: el.autocomplete,
+					placeholder: el.placeholder,
+					ariaLabel: el.getAttribute('aria-label'),
+					attributes: attrs(el)
+				})),
+				selects: Array.from(document.querySelectorAll('select')).map(el => ({
+					name: el.name,
+					id: el.id,
+					attributes: attrs(el),
+					options: Array.from(el.options).map(o => ({
+						text: compactText(o),
+						value: o.value,
+						disabled: o.disabled
+					}))
+				})),
+				buttons: Array.from(document.querySelectorAll('button, input[type="submit"], input[type="button"]')).map(el => ({
+					text: compactText(el),
+						name: el.name,
+						id: el.id,
+					type: el.type,
+					attributes: attrs(el)
+				})),
+				labels: Array.from(document.querySelectorAll('label')).map(el => ({
+					text: compactText(el),
+					 htmlFor: el.htmlFor
+				})),
+				bodyText: (document.body ? document.body.innerText : '').trim().slice(0, 1200)
 			});
 		})()
 	`, &formInfo)); err != nil {
 		log.Warn().Err(err).Msg("Could not inspect Foundry login form")
 	} else {
-		log.Info().Str("formInfo", formInfo).Msg("Foundry login form inspected")
+		log.Info().Str("username", username).Str("formInfo", formInfo).Msg("Foundry login form inspected")
 	}
 
 	switch preCheck {
